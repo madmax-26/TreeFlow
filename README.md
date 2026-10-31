@@ -22,7 +22,8 @@ including [River](https://riverml.xyz) models out of the box.
   image patches as *references*; each snapshot records the path every patch
   takes. *NodeView* shows which patches went left and right at a split, and can
   highlight a patch's path in the tree.
-- **Track per-tree metrics** such as accuracy, with mean and spread across trees.
+- **Track metrics** — per-tree values such as accuracy (with mean and spread
+  across trees), plus ensemble-level values such as the forest's own accuracy.
 
 ## Requirements
 
@@ -162,7 +163,8 @@ cat > my-run/iteration-0/forest.json <<'EOF'
 {
   "class_labels": ["Water", "Forest"],
   "class_colors": ["#4C78C8", "#2E7D32"],
-  "trees": { "0": { "height": 1, "n_nodes": 3, "metrics": { "accuracy": 0.9 } } }
+  "trees": { "0": { "height": 1, "n_nodes": 3, "metrics": { "accuracy": 0.9 } } },
+  "metrics": { "accuracy": 0.93 }
 }
 EOF
 
@@ -181,6 +183,14 @@ python Library/treeflow.py --dir my-run
 - `trees` — one entry per `tree-N.csv`, keyed by `N`, with `height` (deepest
   node depth) and `n_nodes`. `metrics` holds any per-tree numbers you want
   shown (accuracy, …) and may be `{}`.
+- `metrics` (top level, optional) — numbers about the **ensemble as a whole**,
+  e.g. the forest's accuracy from its combined vote. Keep these apart from the
+  per-tree `metrics`: the frontend averages per-tree values across trees, and
+  that average is not the forest's score — an ensemble usually beats its
+  individual trees.
+- `group_metrics` (optional, on trees and at the top level) — the same, but per
+  label group / regression target for multi-output forests:
+  `{"Class": {"accuracy": 0.6}, "Popularity": {"mae": 4.1}}`.
 
 **`tree-N.csv`** — one row per node:
 - Rows must be in **depth-first order**: a node, then its whole left subtree,

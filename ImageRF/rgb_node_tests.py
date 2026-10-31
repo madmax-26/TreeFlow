@@ -21,6 +21,11 @@ Two deliberate design choices, both explained where they are implemented:
   * there is NO four-rectangle "difference of two differences" projection —
     Lepetit & Fua measured that family (their C4) as slightly WORSE than the
     simple pair tests, and it doubles the cost.
+
+Beyond Shotton, a test may read a DERIVED channel (chromaticity, gradient
+magnitude) and aggregate with "std" (texture); see rgb_patch for both. Pass
+channels=[0, 1, 2], operators=["mean", "center"] to the sampler to recover the
+original colour-only family.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ from typing import Optional
 
 import numpy as np
 
-from rgb_patch import N_CHANNELS, PreparedPatch, as_prepared
+from rgb_patch import N_FEATURE_CHANNELS, PreparedPatch, as_prepared
 
 # ---------------------------------------------------------------------------
 # Test family
@@ -40,7 +45,9 @@ from rgb_patch import N_CHANNELS, PreparedPatch, as_prepared
 # O(area) per evaluation and destroy the O(1) guarantee the whole design rests
 # on. (In PolSAR, min_span/max_span were physically meaningful — the brightest
 # and darkest scatterer. For RGB a small-rectangle mean covers the same ground.)
-OPERATORS = ["mean", "center"]
+# "std" CAN be read from tables — a second one of squared values — so it is the
+# texture operator that stays inside the guarantee.
+OPERATORS = ["mean", "center", "std"]
 
 # NOTE: no entry here may ever be the string "1pt". The reused PolSAR forest
 # core (polsar_online_rf._sample_candidates) contains
@@ -72,9 +79,10 @@ class RectTest:
     rects : list of (row, col, rect_h, rect_w)
         Rectangles inside the patch. One entry for "unary", two otherwise.
     operators : list of str
-        Aggregate applied to each rectangle: "mean" or "center".
+        Aggregate applied to each rectangle: "mean", "center" or "std".
     channels : list of int
-        RGB channel index read for each rectangle.
+        Feature channel read for each rectangle — an index into
+        rgb_patch.FEATURE_CHANNELS (0-2 colour, 3-5 derived).
     reference : None
         Always None. Present only to satisfy the duck-typed NodeTest contract
         that the reused PolSAR forest probes; RGB tests have no reference pool.
@@ -101,7 +109,9 @@ class RectTest:
 
         rects, ops, chs = self.rects, self.operators, self.channels
         r, c, rh, rw = rects[0]
-        v0 = (p.rect_mean(r, c, rh, rw, chs[0]) if ops[0] == "mean"
+        op = ops[0]
+        v0 = (p.rect_mean(r, c, rh, rw, chs[0]) if op == "mean"
+              else p.rect_std(r, c, rh, rw, chs[0]) if op == "std"
               else p.rect_center(r, c, rh, rw, chs[0]))
 
         proj = self.projection
@@ -109,7 +119,9 @@ class RectTest:
             return v0
 
         r, c, rh, rw = rects[1]
-        v1 = (p.rect_mean(r, c, rh, rw, chs[1]) if ops[1] == "mean"
+        op = ops[1]
+        v1 = (p.rect_mean(r, c, rh, rw, chs[1]) if op == "mean"
+              else p.rect_std(r, c, rh, rw, chs[1]) if op == "std"
               else p.rect_center(r, c, rh, rw, chs[1]))
 
         if proj == "diff":
@@ -177,7 +189,7 @@ class RectTestSampler:
             raise ValueError("min_rect_size must not exceed max_rect_size")
         self.projections = list(projections or PROJECTIONS)
         self.operators = list(operators or OPERATORS)
-        self.channels = list(channels if channels is not None else range(N_CHANNELS))
+        self.channels = list(channels if channels is not None else range(N_FEATURE_CHANNELS))
         self.cross_channel = bool(cross_channel)
 
         if "1pt" in self.projections:                    # see PROJECTIONS

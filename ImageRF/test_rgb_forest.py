@@ -1,5 +1,5 @@
 """
-Sections 8-12 of the ImageRF assertion suite: forest behaviour on real AID
+Sections 9-13 of the ImageRF assertion suite: forest behaviour on real AID
 data, the TreeFlow round-trip, and whole-image prediction.
 
 Imported and run by test_rgb_rf.py; not meant to be run standalone (it shares

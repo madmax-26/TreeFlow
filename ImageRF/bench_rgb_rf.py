@@ -90,7 +90,8 @@ def bench_prepare(rng, S=64):
     arr = rng.integers(0, 256, size=(S, S, 3), dtype=np.uint8)
     us = timed(lambda: PreparedPatch(arr), 2000)
     p = PreparedPatch(arr)
-    kb = (p.arr.nbytes + sum(a.buffer_info()[1] * 4 for a in p._sat) + len(p._px)) / 1024
+    kb = (p.arr.nbytes + sum(a.buffer_info()[1] * a.itemsize for a in p._sat + p._sat2)
+          + len(p._px)) / 1024
     print(f"  {S}x{S}: {us:.0f} us, ~{kb:.0f} KB per patch")
     for bs in (1000, 2000, 5000):
         print(f"    batch_size={bs:5} -> ~{bs * kb / 1024:.0f} MB resident")

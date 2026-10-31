@@ -5,7 +5,8 @@ import { selectedTreeIdAtom } from '../ForestView/ForestViewAtoms'
 import ExpandedBarChart from '../ExpandedBarChart/ExpandedBarChart'
 import {
   activeForestStatAtom, activeGroupMetricStatsAtom, forestSizeStatsAtom,
-  treeMetricStatsAtom, fmtMetric, type MetricStats,
+  treeMetricStatsAtom, ensembleMetricsAtom, activeGroupEnsembleMetricsAtom,
+  fmtMetric, type MetricStats,
 } from './ForestMetricsAtoms'
 import { HEADING_FONT } from '../../../../theme'
 
@@ -52,6 +53,30 @@ function Row({ label, value, accent, style }:
 }
 
 // ── Metric display ───────────────────────────────────────────────────────────
+
+// One forest-level value. `treeMean`, when a per-tree metric of the same name
+// exists, is shown beside it for comparison — an ensemble normally beats the
+// mean of its trees, so the two side by side make the ensemble gain explicit.
+function EnsembleRow({ name, value, treeMean, accent = METRIC_ACCENT }:
+  { name: string; value: number; treeMean?: number; accent?: string }) {
+  return (
+    <div
+      title={treeMean !== undefined
+        ? `${name} of the whole forest (combined vote): ${fmtMetric(value)}. `
+          + `Mean of the individual trees: ${fmtMetric(treeMean)}.`
+        : `${name} of the whole forest (combined vote).`}
+      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '2px 0' }}
+    >
+      <span style={{ fontSize: 10, fontWeight: 700, color: accent }}>{name}</span>
+      <span style={{ fontSize: 11, fontWeight: 600, color: '#333' }}>
+        {fmtMetric(value)}
+        {treeMean !== undefined && (
+          <span style={{ fontSize: 9, fontWeight: 400, color: '#aaa' }}> · ⌀ tree {fmtMetric(treeMean)}</span>
+        )}
+      </span>
+    </div>
+  )
+}
 
 const BAR_W = 44
 const BAR_H = 6
@@ -101,13 +126,7 @@ function MetricStatRow({ name, m, accent = METRIC_ACCENT, fmt = fmtMetric }:
   const lo = Math.min(0, m.min)
   const hi = m.max > lo ? m.max : lo + 1
   return (
-    <div
-      title={`${name} of each tree on its own, over ${m.n} tree${m.n !== 1 ? 's' : ''}: `
-           + `mean ${fmt(m.mean)}, σ ${fmt(m.std)}, range ${fmt(m.min)} – ${fmt(m.max)}. `
-           + `Bars are scaled to the largest value (${fmt(m.max)}). `
-           + `This is NOT the forest's ${name}.`}
-      style={{ padding: '3px 0' }}
-    >
+    <div style={{ padding: '3px 0' }}>
       <div style={{ fontSize: 10, fontWeight: 700, color: accent, marginBottom: 1 }}>{name}</div>
       <StatLine label="mean" value={fmt(m.mean)}
         bar={<StatBar to={m.mean} lo={lo} hi={hi} color={accent} />} />
@@ -164,6 +183,8 @@ export default function ForestMetrics() {
   const forestStat       = useAtomValue(activeForestStatAtom)
   const treeMetricStats  = useAtomValue(treeMetricStatsAtom)
   const groupMetricStats = useAtomValue(activeGroupMetricStatsAtom)
+  const ensembleMetrics  = useAtomValue(ensembleMetricsAtom)
+  const groupEnsemble    = useAtomValue(activeGroupEnsembleMetricsAtom)
   const group            = useAtomValue(activeGroupAtom)
   const isReg            = useAtomValue(activeTaskAtom) === 'regression'
 
@@ -198,10 +219,31 @@ export default function ForestMetrics() {
               <Row label="Leaf σ" value={forestStat.std.toFixed(3)} style={{ fontSize: 10, fontWeight: 700, color: STRUCTURE_ACCENT, marginBottom: 1 }} />
             )}
           </Section>
+          {/* Metrics the user attached to the FOREST as a whole (its own
+              combined-vote accuracy, …). One value each, no spread. When a
+              per-tree metric of the same name exists its mean is shown beside
+              it, because that gap — ensemble vs the average tree — is the
+              number people most often misread. */}
+          {(Object.keys(ensembleMetrics).length > 0 || Object.keys(groupEnsemble).length > 0) && (
+            <Section title="User-defined metrics · forest">
+              <div style={{ fontSize: 9, color: '#bbb', lineHeight: 1.35, marginBottom: 5, fontStyle: 'italic' }}>
+                The ensemble&apos;s score.
+              </div>
+              {Object.entries(ensembleMetrics).map(([key, v]) => (
+                <EnsembleRow key={key} name={key} value={v}
+                  treeMean={treeMetricStats[key]?.mean} />
+              ))}
+              {Object.entries(groupEnsemble).map(([key, v]) => (
+                <EnsembleRow key={`g-${key}`} name={group.name ? `${group.name} · ${key}` : key}
+                  value={v} treeMean={groupMetricStats[key]?.mean} accent={GROUP_METRIC_ACCENT} />
+              ))}
+            </Section>
+          )}
+
           {/* Metrics the user attached to each tree — named explicitly so they
               are never mistaken for the built-in structural ones above. */}
           {Object.keys(treeMetricStats).length > 0 && (
-            <Section title="User-defined metrics">
+            <Section title="User-defined metrics · per tree">
               <div style={{ fontSize: 9, color: '#bbb', lineHeight: 1.35, marginBottom: 5, fontStyle: 'italic' }}>
                 Mean over the {stats.count} individual trees — <strong>not</strong> the
                 ensemble score.

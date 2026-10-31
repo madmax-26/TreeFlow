@@ -1,5 +1,5 @@
 """
-Section 11 of the ImageRF assertion suite: the TreeFlow round-trip.
+Section 12 of the ImageRF assertion suite: the TreeFlow round-trip.
 
 Mirrors PolSAR/test_reference_paths.py's path/id-alignment check, and adds the
 assertion that is the entire point of ImageRF: the PNG the backend serves for a
@@ -86,7 +86,8 @@ def run_treeflow_section(rng) -> None:
         rf.partial_fit(half, lab)
         ev = evaluate_image_rf(rf, patches[:100], labels[:100])
         forest = convert_image_rf(rf, class_labels=ds.class_names,
-                                  tree_metrics=ev["tree_metrics"])
+                                  tree_metrics=ev["tree_metrics"],
+                                  forest_metrics=ev["forest_metrics"])
         forest.class_colors = scene_class_colors(N_CLASSES)
         treeflow.push(forest, label_map=label_map)
 

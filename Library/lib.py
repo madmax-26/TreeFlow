@@ -96,6 +96,16 @@ class Forest:
     # Multi-target regression: names of the targets, aligned with the per-node
     # value/impurity arrays. When set, takes precedence over target_label.
     target_labels: Union[List[str], None] = field(default=None)
+    # Forest-level custom metrics — same shape as Tree.metrics, but scoped to the
+    # ENSEMBLE: e.g. {"accuracy": 0.22} computed from the averaged posteriors.
+    # Kept apart from Tree.metrics on purpose: the frontend averages per-tree
+    # values into a "mean over trees" figure, and the mean of the individual
+    # trees is NOT the forest's score (22% forest vs ~10% per tree is typical).
+    metrics: Dict[str, float] = field(default_factory=dict)
+    # Group-scoped forest metrics, keyed by label-group / target NAME — same
+    # shape as Tree.group_metrics, e.g. {"Class": {"accuracy": 0.6},
+    # "Popularity": {"mae": 4.1}} for a mixed forest.
+    group_metrics: Union[Dict[str, Dict[str, float]], None] = None
 
 
 def apply_label_map(forest: Forest, label_map: dict) -> Forest:
@@ -110,7 +120,7 @@ def apply_label_map(forest: Forest, label_map: dict) -> Forest:
 
     Matching is exact first, then with surrounding whitespace stripped (River
     labels sometimes carry stray spaces, e.g. " Approved"). Unmatched names
-    stay unchanged. Group-keyed structures (class_colors, group_metrics) are
+    stay unchanged. Group-keyed structures (class_colors, tree/forest group_metrics) are
     renamed in sync. Mutates the forest and returns it.
     """
     flat: dict[str, str] = {}
@@ -146,10 +156,12 @@ def apply_label_map(forest: Forest, label_map: dict) -> Forest:
     if forest.target_labels:
         forest.target_labels = [rename(t) for t in forest.target_labels]
 
-    # group-scoped tree metrics are keyed by group / target name
+    # group-scoped tree AND forest metrics are keyed by group / target name
     for tree in forest.trees.values():
         if tree.group_metrics:
             tree.group_metrics = {rename(g): m for g, m in tree.group_metrics.items()}
+    if forest.group_metrics:
+        forest.group_metrics = {rename(g): m for g, m in forest.group_metrics.items()}
 
     return forest
 
@@ -173,7 +185,10 @@ def _write_forest_json(forest: Forest, output_dir: str) -> None:
         "class_colors": forest.class_colors,
         "task": forest.task,
         "trees": {str(tree_id): _tree_json(tree) for tree_id, tree in forest.trees.items()},
+        "metrics": forest.metrics,
     }
+    if forest.group_metrics:
+        data["group_metrics"] = forest.group_metrics
     if forest.correlation_matrix is not None:
         data["correlation_matrix"] = forest.correlation_matrix
     if forest.task != "classification" or forest.target_labels is not None:

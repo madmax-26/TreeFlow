@@ -75,6 +75,106 @@ if TYPE_CHECKING:
     from river.forest import AMFClassifier, ARFClassifier
 
 
+# ── Ensemble (forest-level) metrics ──────────────────────────────────────────
+#
+# These score the FOREST's own prediction — the ensemble's predict_one, i.e. the
+# aggregated vote / averaged output — and land in Forest.metrics. They are not
+# a mean of the per-tree figures: an ensemble normally beats the average of its
+# members, so the two must stay separate (the frontend shows them apart).
+
+def _ensemble_accuracy(model, eval_data: list | None) -> dict[str, float]:
+    """{"accuracy": ...} of model.predict_one over eval_data, {} if unscorable.
+    Samples the model cannot predict yet (None, before any learning) are
+    skipped rather than counted wrong."""
+    if not eval_data:
+        return {}
+    hits = n = 0
+    for x, y in eval_data:
+        try:
+            pred = model.predict_one(x)
+        except Exception:
+            continue
+        if pred is None:
+            continue
+        n += 1
+        hits += int(pred == y)
+    return {"accuracy": hits / n} if n else {}
+
+
+def _ensemble_mae(model, eval_data: list | None) -> dict[str, float]:
+    """{"mae": ...} of model.predict_one over eval_data, {} if unscorable."""
+    if not eval_data:
+        return {}
+    err = 0.0
+    n = 0
+    for x, y in eval_data:
+        try:
+            pred = model.predict_one(x)
+        except Exception:
+            continue
+        if pred is None:
+            continue
+        n += 1
+        err += abs(float(pred) - float(y))
+    return {"mae": err / n} if n else {}
+
+
+def _ensemble_group_accuracy(model, eval_data: list | None) -> dict[str, dict[str, float]]:
+    """Per-group ensemble accuracy for a multi-output model whose predict_one
+    returns {label_id: value} (MultiClassEncoder). Keyed by str(label_id), the
+    same group names convert_arf_ml emits, for Forest.group_metrics."""
+    if not eval_data:
+        return {}
+    hits: dict[str, int] = {}
+    n = 0
+    for x, y in eval_data:
+        try:
+            pred = model.predict_one(x)
+        except Exception:
+            continue
+        if not pred:
+            continue
+        n += 1
+        for label_id, true in y.items():
+            g = str(label_id)
+            hits[g] = hits.get(g, 0) + int(pred.get(label_id) == true)
+    return {g: {"accuracy": h / n} for g, h in hits.items()} if n else {}
+
+
+def _ensemble_mixed_metrics(model, eval_data, class_groups, reg_targets) -> dict[str, float]:
+    """Ensemble counterpart of _mixed_tree_metrics, with the SAME key names
+    ("accuracy" / "accuracy <group>", "mae" / "mae <target>") so a tree's figure
+    and the forest's line up. MixedISOUPForest.predict_one already returns
+    argmax labels and un-scaled targets, so no reg_scale handling is needed."""
+    if not eval_data:
+        return {}
+    correct = {g: 0 for g in class_groups}
+    abs_err = {t: 0.0 for t in reg_targets}
+    n = 0
+    for x, y in eval_data:
+        try:
+            p = model.predict_one(x)
+        except Exception:
+            continue
+        if not p:
+            continue
+        n += 1
+        for g in class_groups:
+            if g in y and p.get(g) == y[g]:
+                correct[g] += 1
+        for t in reg_targets:
+            if t in y:
+                abs_err[t] += abs(float(p.get(t, 0.0)) - float(y[t]))
+    if n == 0:
+        return {}
+    out: dict[str, float] = {}
+    for g in class_groups:
+        out["accuracy" if len(class_groups) == 1 else f"accuracy {g}"] = correct[g] / n
+    for t in reg_targets:
+        out["mae" if len(reg_targets) == 1 else f"mae {t}"] = abs_err[t] / n
+    return out
+
+
 # ── Public converters ─────────────────────────────────────────────────────────
 
 def convert_srp(srp: "SRPClassifier", n_samples: int | None = None, eval_data: list | None = None) -> Forest:
@@ -106,7 +206,8 @@ def convert_srp(srp: "SRPClassifier", n_samples: int | None = None, eval_data: l
             metrics["warnings"] = float(base_learner.n_warnings_detected)
         trees[i] = _tree_from_htree(htree, metrics, n_samples=n_samples, lambda_value=srp.lam)
     corr = _correlation_matrix([bl.model for bl in srp.models], eval_data) if eval_data else None
-    return Forest(trees=trees, class_labels=class_labels, correlation_matrix=corr)
+    return Forest(trees=trees, class_labels=class_labels, correlation_matrix=corr,
+                  metrics=_ensemble_accuracy(srp, eval_data))
 
 
 def convert_arf(arf: "ARFClassifier", n_samples: int | None = None, eval_data: list | None = None) -> Forest:
@@ -133,7 +234,8 @@ def convert_arf(arf: "ARFClassifier", n_samples: int | None = None, eval_data: l
         # ARF member IS the Hoeffding tree — no .model wrapper, no .metric
         trees[i] = _tree_from_htree(htree, metrics={}, n_samples=n_samples, lambda_value=arf.lambda_value)
     corr = _correlation_matrix(list(arf.models), eval_data) if eval_data else None
-    return Forest(trees=trees, class_labels=class_labels, correlation_matrix=corr)
+    return Forest(trees=trees, class_labels=class_labels, correlation_matrix=corr,
+                  metrics=_ensemble_accuracy(arf, eval_data))
 
 
 def convert_amf(amf: "AMFClassifier", eval_data: list | None = None) -> Forest:
@@ -165,7 +267,8 @@ def convert_amf(amf: "AMFClassifier", eval_data: list | None = None) -> Forest:
             metrics["accuracy"] = correct / len(eval_data)
         trees[i] = _tree_from_mondrian(mtree, class_pos, len(sorted_classes), metrics)
     corr = _correlation_matrix(mtrees, eval_data) if eval_data else None
-    return Forest(trees=trees, class_labels=class_labels, correlation_matrix=corr)
+    return Forest(trees=trees, class_labels=class_labels, correlation_matrix=corr,
+                  metrics=_ensemble_accuracy(amf, eval_data))
 
 
 # ── Regression converters ─────────────────────────────────────────────────────
@@ -187,7 +290,8 @@ def convert_arf_reg(
             htree, metrics={}, n_samples=n_samples,
             lambda_value=getattr(arf, "lambda_value", None),
         )
-    forest = Forest(trees=trees, task="regression", target_label=target_label)
+    forest = Forest(trees=trees, task="regression", target_label=target_label,
+                    metrics=_ensemble_mae(arf, eval_data))
     _finalize_regression(forest, list(arf.models), eval_data)
     return forest
 
@@ -210,7 +314,8 @@ def convert_srp_reg(
             htree, metrics, n_samples=n_samples,
             lambda_value=getattr(srp, "lam", None),
         )
-    forest = Forest(trees=trees, task="regression", target_label=target_label)
+    forest = Forest(trees=trees, task="regression", target_label=target_label,
+                    metrics=_ensemble_mae(srp, eval_data))
     _finalize_regression(forest, [bl.model for bl in srp.models], eval_data)
     return forest
 
@@ -303,7 +408,8 @@ def convert_arf_ml(encoder, n_samples: int | None = None, eval_data: list | None
             n_samples=n_samples, lambda_value=getattr(arf, "lambda_value", None),
         )
     corr = _correlation_matrix(list(arf.models), eval_data) if eval_data else None
-    return Forest(trees=trees, class_labels=class_labels, correlation_matrix=corr)
+    return Forest(trees=trees, class_labels=class_labels, correlation_matrix=corr,
+                  group_metrics=_ensemble_group_accuracy(encoder, eval_data) or None)
 
 
 def convert_isoup_reg(
@@ -594,6 +700,12 @@ def convert_isoup_mixed(
                  + [("reg", t) for t in reg_targets])
         forest.correlation_matrix = _correlation_matrix_reg_multi(
             models, eval_data, targets, tasks=tasks)
+        # Ensemble metrics need the ensemble's own predict_one returning group
+        # labels + targets, which only a MixedISOUPForest has. Raw iSOUP trees
+        # (a list, or one bare tree whose predict_one returns indicator targets)
+        # get none.
+        if isinstance(model, MixedISOUPForest):
+            forest.metrics = _ensemble_mixed_metrics(model, eval_data, class_groups, reg_targets)
     return forest
 
 

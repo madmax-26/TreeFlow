@@ -119,6 +119,10 @@ def main() -> None:
             forest = convert_arf(model, n_samples=i, eval_data=list(recent))
             for t, tree in forest.trees.items():
                 tree.metrics["accuracy"] = round(tree_hits[t] / window, 4)
+            # Same test-then-train footing for the ensemble. convert_arf would
+            # otherwise score it on `recent`, which the model has already learned
+            # from — in-sample, so inflated next to the honest per-tree figures.
+            forest.metrics["accuracy"] = round(forest_hits / window, 4)
 
             if viz is not None:
                 step = viz.push(forest, label_map=label_map)

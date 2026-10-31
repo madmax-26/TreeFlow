@@ -7,7 +7,8 @@ import {
 //
 // Everything the Forest tab reports: aggregates ACROSS the trees, both the
 // standard ones the backend computes (purity / mean / std per label group) and
-// the user-defined per-tree metrics (accuracy, mae, …) summarised here.
+// the user-defined per-tree metrics (accuracy, mae, …) summarised here — plus
+// the user-defined ENSEMBLE metrics, which are single forest-level values.
 // The Tree tab shows a single tree's own values; anything averaged over the
 // forest lives in this module.
 
@@ -82,6 +83,35 @@ export const activeGroupMetricStatsAtom = atom((get): Record<string, MetricStats
   const name = get(activeGroupAtom).name
   return metricStatsFrom(Object.values(state.data.trees).map(m => m.group_metrics?.[name] ?? {}))
 })
+
+// ── Ensemble metrics ─────────────────────────────────────────────────────────
+//
+// Forest-level user metrics (Forest.metrics / group_metrics in forest.json):
+// one value per forest, describing the ENSEMBLE's prediction. Deliberately kept
+// apart from the per-tree stats above — those are means over individual trees,
+// and the mean tree is not the forest (22% forest vs ~10% per tree is typical).
+
+/** Tree-global ensemble metrics (accuracy, …) of the current forest. */
+export const ensembleMetricsAtom = atom((get): Record<string, number> => {
+  const state = get(loadableForest)
+  if (state.state !== 'hasData') return {}
+  return finiteOnly(state.data.metrics ?? {})
+})
+
+/** Ensemble metrics scoped to the ACTIVE label group / target. */
+export const activeGroupEnsembleMetricsAtom = atom((get): Record<string, number> => {
+  const state = get(loadableForest)
+  if (state.state !== 'hasData') return {}
+  return finiteOnly(state.data.group_metrics?.[get(activeGroupAtom).name] ?? {})
+})
+
+function finiteOnly(bag: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const [k, v] of Object.entries(bag)) {
+    if (typeof v === 'number' && Number.isFinite(v)) out[k] = v
+  }
+  return out
+}
 
 // Structural spread of the forest — the same mean/σ/range treatment the custom
 // metrics get, so the Forest tab reports every aggregate the same way.

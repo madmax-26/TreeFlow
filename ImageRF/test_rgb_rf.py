@@ -2,12 +2,12 @@
 Assertion script for ImageRF (run manually):
 
     python test_rgb_rf.py            # all sections
-    python test_rgb_rf.py --quick    # skip the slow real-data sections (8-12)
+    python test_rgb_rf.py --quick    # skip the slow real-data sections (9-13)
 
 Sections:
-  1-7   patch/integral-image and node-test correctness (fast, synthetic)
-  8-10  forest behaviour on real AID data (slow)
-  11-12 TreeFlow round-trip and whole-image prediction (slow)
+  1-8   patch/integral-image and node-test correctness (fast, synthetic)
+  9-11  forest behaviour on real AID data (slow)
+  12-13 TreeFlow round-trip and whole-image prediction (slow)
 """
 
 import dataclasses
@@ -18,7 +18,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from rgb_patch import PreparedPatch, as_prepared, integral_image, to_uint8_rgb
+from rgb_patch import (FEATURE_CHANNELS, N_FEATURE_CHANNELS, PreparedPatch, as_prepared,
+                       derived_channels, integral_image, to_uint8_rgb)
 from rgb_node_tests import OPERATORS, PROJECTIONS, RectTest, RectTestSampler
 
 PASS, FAIL = "PASS", "FAIL"
@@ -225,6 +226,92 @@ def test_sizing(rng):
     check(rs.min() == 0 and rs.max() == S - 1, "row offsets reach both edges (scene mode)")
 
 
+# ── 8. Derived channels and the std operator ─────────────────────────────────
+
+def test_features(rng):
+    print("Derived channels and std operator:")
+    from scipy import ndimage
+
+    S = 64
+    arr = rng.integers(0, 256, size=(S, S, 3), dtype=np.uint8)
+    arr[0, 0] = 0                                    # one black pixel
+    d = derived_channels(arr)
+    f = arr.astype(np.float64)
+    tot = f.sum(axis=2)
+    nz = tot > 0
+    g_ref = np.where(nz, 255 * f[:, :, 1] / np.where(nz, tot, 1), 85.0)
+    b_ref = np.where(nz, 255 * f[:, :, 2] / np.where(nz, tot, 1), 85.0)
+    check(np.array_equal(d[:, :, 0], np.clip(np.rint(g_ref), 0, 255).astype(np.uint8)),
+          "g_chroma == 255 * G / (R+G+B)")
+    check(np.array_equal(d[:, :, 1], np.clip(np.rint(b_ref), 0, 255).astype(np.uint8)),
+          "b_chroma == 255 * B / (R+G+B)")
+    check(d[0, 0, 0] == 85 and d[0, 0, 1] == 85, "a black pixel gets neutral chromaticity 85")
+
+    # Chromaticity must ignore brightness: halving a patch keeps it (up to rounding).
+    bright = rng.integers(40, 256, size=(S, S, 3), dtype=np.uint8)
+    dim = (bright // 2 * 2).astype(np.uint8)
+    half = (dim // 2).astype(np.uint8)
+    diff = np.abs(derived_channels(dim)[:, :, :2].astype(int)
+                  - derived_channels(half)[:, :, :2].astype(int))
+    check(diff.max() <= 1, f"chromaticity is brightness-invariant (max diff {diff.max()})")
+
+    lum = tot / 3.0
+    mag = np.hypot(ndimage.sobel(lum, axis=1, mode="nearest"),
+                   ndimage.sobel(lum, axis=0, mode="nearest")) / 4.0
+    check(np.array_equal(d[:, :, 2], np.clip(np.rint(mag), 0, 255).astype(np.uint8)),
+          "gradient == Sobel magnitude / 4 (matches scipy.ndimage)")
+    flat = derived_channels(np.full((S, S, 3), 120, np.uint8))
+    check(flat[:, :, 2].max() == 0, "a flat patch has zero gradient")
+    step = np.zeros((S, S, 3), np.uint8)
+    step[:, S // 2:] = 255
+    check(derived_channels(step)[:, :, 2].max() == 255, "a full 0->255 step reaches 255")
+
+    p = PreparedPatch(arr)
+    feats = np.concatenate([arr, d], axis=2)
+    ok_mean = ok_std = ok_ctr = True
+    worst = 0.0
+    for _ in range(2000):
+        rh = int(rng.integers(1, S + 1)); rw = int(rng.integers(1, S + 1))
+        r = int(rng.integers(0, S - rh + 1)); c = int(rng.integers(0, S - rw + 1))
+        ch = int(rng.integers(0, N_FEATURE_CHANNELS))
+        region = feats[r:r + rh, c:c + rw, ch].astype(np.float64)
+        if p.rect_mean(r, c, rh, rw, ch) != brute_mean(feats, r, c, rh, rw, ch):
+            ok_mean = False
+        got, want = p.rect_std(r, c, rh, rw, ch), float(region.std())
+        worst = max(worst, abs(got - want))
+        if got < 0 or not np.isfinite(got):
+            ok_std = False
+        if p.rect_center(r, c, rh, rw, ch) != feats[r + rh // 2, c + rw // 2, ch]:
+            ok_ctr = False
+    check(ok_mean, "rect_mean is exact on all 6 feature channels")
+    check(ok_std and worst < 1e-9, f"rect_std == numpy std (2000 rects, max abs err {worst:.1e})")
+    check(ok_ctr, "rect_center reads derived channels too")
+    check(all(p.rect_std(r, c, 1, 1, ch) == 0 for r in range(0, S, 7)
+              for c in range(0, S, 7) for ch in range(N_FEATURE_CHANNELS)),
+          "std of a 1x1 rectangle is exactly 0")
+    check(PreparedPatch(np.full((S, S, 3), 200, np.uint8)).rect_std(0, 0, S, S, 0) == 0,
+          "std of a constant patch is exactly 0")
+
+    # Squared tables are int64: a large saturated patch must not overflow.
+    big = np.zeros((256, 256, 3), np.uint8)
+    big[::2] = 255
+    pb = PreparedPatch(big)
+    check(abs(pb.rect_std(0, 0, 256, 256, 0) - 127.5) < 1e-9,
+          "std stays exact on a 256x256 patch (int64 squared tables)")
+
+    sampler = RectTestSampler(patch_size=S, cross_channel=True)
+    tests = [sampler.sample(rng) for _ in range(3000)]
+    check({o for t in tests for o in t.operators} == set(OPERATORS),
+          f"every operator sampled: {OPERATORS}")
+    check({c for t in tests for c in t.channels} == set(range(N_FEATURE_CHANNELS)),
+          f"every feature channel sampled: {FEATURE_CHANNELS}")
+    check(all(np.isfinite(t.project(p)) for t in tests), "all new-family projections finite")
+    rgb_only = RectTestSampler(patch_size=S, channels=[0, 1, 2], operators=["mean", "center"])
+    t2 = [rgb_only.sample(rng) for _ in range(500)]
+    check(all(set(t.channels) <= {0, 1, 2} and "std" not in t.operators for t in t2),
+          "the original colour-only family is still selectable")
+
+
 def main() -> None:
     quick = "--quick" in sys.argv
     rng = np.random.default_rng(7)
@@ -236,6 +323,7 @@ def main() -> None:
     test_guard(rng)
     test_contract()
     test_sizing(rng)
+    test_features(rng)
 
     if not quick:
         from test_rgb_forest import run_forest_sections

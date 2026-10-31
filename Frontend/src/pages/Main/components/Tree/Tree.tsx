@@ -720,7 +720,7 @@ export default function Tree({ treeId, meta }: TreeProps) {
     const { bounds } = layout
     const tx = svgSize.w / 2 - ((bounds.x0 + bounds.x1) / 2) * fitScale
     const ty = svgSize.h / 2 - ((bounds.y0 + bounds.y1) / 2) * fitScale
-    zoomRef.current.scaleExtent([fitScale * 0.75, 10])
+    zoomRef.current.scaleExtent([fitScale * 0.75, 60])
     d3.select(svgRef.current).call(
       zoomRef.current.transform,
       d3.zoomIdentity.translate(tx, ty).scale(fitScale)
@@ -746,7 +746,7 @@ export default function Tree({ treeId, meta }: TreeProps) {
   // Auto-fit once per tree; also update scaleExtent whenever layout changes.
   useEffect(() => {
     if (!layout || !zoomRef.current) return
-    zoomRef.current.scaleExtent([fitScale * 0.75, 10])
+    zoomRef.current.scaleExtent([fitScale * 0.75, 60])
     if (!fitDone.current) {
       resetView()
       fitDone.current = true

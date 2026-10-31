@@ -131,7 +131,8 @@ def main():
 
         ev = evaluate_image_rf(rf, eval_patches, eval_labels)
         forest = convert_image_rf(rf, class_labels=ds.class_names,
-                                  tree_metrics=ev["tree_metrics"])
+                                  tree_metrics=ev["tree_metrics"],
+                                  forest_metrics=ev["forest_metrics"])
         forest.class_colors = class_colors
         idx = treeflow.push(forest, label_map=label_map)
         tree_acc = sum(m["accuracy"] for m in ev["tree_metrics"]) / len(ev["tree_metrics"])

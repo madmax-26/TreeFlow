@@ -40,6 +40,12 @@ export type ForestData = {
   target_labels?: string[] | null
   // Forest-level per-group aggregates (average over trees), group-ordinal aligned
   forest_stats?: GroupStats[] | null
+  // User-supplied ENSEMBLE metrics (e.g. the forest's own accuracy from its
+  // combined vote). Same shape as TreeMeta.metrics / group_metrics, but NOT a
+  // tree average — an ensemble normally beats the mean of its trees. Optional:
+  // absent on iterations saved before the field existed.
+  metrics?: Record<string, number>
+  group_metrics?: Record<string, Record<string, number>>
 }
 
 export type TreeNodeData = {

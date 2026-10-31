@@ -65,6 +65,7 @@ def convert_polsar_rf(
     eval_labels: Optional[np.ndarray] = None,
     n_trees: Optional[int] = None,
     tree_metrics: Optional[list] = None,
+    forest_metrics: Optional[dict] = None,
 ) -> Forest:
     """Convert a (partially) trained PolSAR Random Forest to a TreeFlow Forest.
 
@@ -72,27 +73,33 @@ def convert_polsar_rf(
 
     class_labels: display names for the classes. Defaults to "0".."n_classes-1".
     eval_patches / eval_labels: optional held-out set. When both are provided,
-                  each tree's accuracy on it is added to that tree's metrics.
+                  each tree's accuracy on it is added to that tree's metrics and
+                  the ensemble accuracy to the forest's metrics.
                   Routing the eval set is the expensive part of a push — if you
                   also want the forest-level accuracy, DON'T route it a second
                   time via rf.predict: use evaluate_polsar_rf once and pass its
-                  "tree_metrics" here instead.
+                  "tree_metrics" and "forest_metrics" here instead.
     n_trees:      only convert the first n trees (None → all).
     tree_metrics: precomputed per-tree metrics dicts (one per converted tree,
                   e.g. from evaluate_polsar_rf). Takes precedence over
                   eval_patches/eval_labels.
+    forest_metrics: precomputed ENSEMBLE metrics for Forest.metrics, e.g.
+                  evaluate_polsar_rf(...)["forest_metrics"]. Takes precedence
+                  over eval_patches/eval_labels.
     """
     members = rf.trees if n_trees is None else rf.trees[:n_trees]
     labels = [str(c) for c in (class_labels or range(rf.n_classes))]
-    if tree_metrics is None and eval_patches is not None and eval_labels is not None:
-        tree_metrics = evaluate_polsar_rf(rf, eval_patches, eval_labels, n_trees=n_trees)["tree_metrics"]
+    if (tree_metrics is None or forest_metrics is None)             and eval_patches is not None and eval_labels is not None:
+        ev = evaluate_polsar_rf(rf, eval_patches, eval_labels, n_trees=n_trees)
+        tree_metrics = ev["tree_metrics"] if tree_metrics is None else tree_metrics
+        forest_metrics = ev["forest_metrics"] if forest_metrics is None else forest_metrics
 
     trees: dict[int, Tree] = {}
     for i, ptree in enumerate(members):
         metrics = dict(tree_metrics[i]) if tree_metrics is not None and i < len(tree_metrics) else {}
         trees[i] = _tree_from_polsar_tree(ptree, metrics)
 
-    return Forest(trees=trees, class_labels=labels)
+    return Forest(trees=trees, class_labels=labels, metrics=dict(forest_metrics or {}))
 
 
 def evaluate_polsar_rf(
@@ -110,19 +117,22 @@ def evaluate_polsar_rf(
     halves the eval routing — by far the dominant cost of a push.
 
         ev = evaluate_polsar_rf(rf, eval_patches, eval_labels)
-        treeflow.push(convert_polsar_rf(rf, tree_metrics=ev["tree_metrics"]))
+        treeflow.push(convert_polsar_rf(rf, tree_metrics=ev["tree_metrics"],
+                                        forest_metrics=ev["forest_metrics"]))
         print(f"forest accuracy {ev['forest_accuracy']:.2%}")
 
     Returns {"tree_metrics": [{"accuracy": float} per tree],
-             "forest_accuracy": float}.
+             "forest_metrics": {"accuracy": float},    # for Forest.metrics
+             "forest_accuracy": float}.                # same number, kept for scripts
 
     The two are NOT the same scale and should not be compared as if one were a
     sanity check on the other. "tree_metrics" is each tree judged alone, while
     "forest_accuracy" averages the posteriors first — so the forest normally
     scores well above the mean tree (e.g. 22% forest vs ~10% per tree on 30-class
     AID, against 3.3% chance). That gap is the ensemble working, not an error.
-    Only "forest_accuracy" is comparable to a published model score; the per-tree
-    values go into Tree.metrics and are labelled per-tree in the frontend.
+    Only the forest figure is comparable to a published model score. Pass
+    "tree_metrics" into Tree.metrics (shown per-tree in the frontend) and
+    "forest_metrics" into Forest.metrics (shown as the ensemble score).
     """
     members = rf.trees if n_trees is None else rf.trees[:n_trees]
     labels = np.asarray(labels, dtype=int)
@@ -138,6 +148,7 @@ def evaluate_polsar_rf(
             {"accuracy": float((tree_preds[t] == labels).mean())}
             for t in range(len(members))
         ],
+        "forest_metrics": {"accuracy": float((forest_preds == labels).mean())},
         "forest_accuracy": float((forest_preds == labels).mean()),
     }
 

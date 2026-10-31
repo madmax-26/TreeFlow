@@ -733,6 +733,10 @@ class TreeFlow:
                 "target_labels": forest.target_labels,
                 # Forest-level per-group aggregates (avg over trees), group ordinals
                 "forest_stats": _forest_group_stats(per_tree_stats),
+                # User-supplied ENSEMBLE metrics (e.g. forest accuracy) — distinct
+                # from forest_stats/per-tree metrics, which are tree averages.
+                "metrics": forest.metrics,
+                "group_metrics": forest.group_metrics or {},
                 "trees": {
                     str(tid): {
                         "height": forest.trees[tid].height,
@@ -888,7 +892,10 @@ class TreeFlow:
             "class_colors": forest.class_colors,
             "task": forest.task,
             "trees": {str(tid): tree_json(tree) for tid, tree in forest.trees.items()},
+            "metrics": forest.metrics,
         }
+        if forest.group_metrics:
+            meta["group_metrics"] = forest.group_metrics
         if forest.correlation_matrix is not None:
             meta["correlation_matrix"] = forest.correlation_matrix
         if forest.task != "classification" or forest.target_labels is not None:
@@ -962,6 +969,11 @@ class TreeFlow:
                 std_range=raw.get("std_range", None),
                 target_label=raw.get("target_label", ""),
                 target_labels=raw.get("target_labels", None),
+                # Absent on iterations saved before forest metrics existed. The
+                # isinstance guard matters: the legacy root-level layout keeps
+                # trees at the top level, so a stray "metrics" key is not ours.
+                metrics=raw["metrics"] if isinstance(raw.get("metrics"), dict) and "trees" in raw else {},
+                group_metrics=raw.get("group_metrics", None),
             ))
 
             # references.json (absent on pre-feature or reference-free
